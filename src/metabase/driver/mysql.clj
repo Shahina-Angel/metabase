@@ -160,6 +160,7 @@
 
 (defn- date-format [format-str expr] (hsql/call :date_format expr (hx/literal format-str)))
 (defn- str-to-date [format-str expr] (hsql/call :str_to_date expr (hx/literal format-str)))
+(defn- sql-concat [lhs rhs] (hsql/call :concat lhs rhs))
 
 
 (defmethod sql.qp/->float :mysql
@@ -179,13 +180,17 @@
 ;; Since MySQL doesn't have date_trunc() we fake it by formatting a date to an appropriate string and then converting
 ;; back to a date. See http://dev.mysql.com/doc/refman/5.6/en/date-and-time-functions.html#function_date-format for an
 ;; explanation of format specifiers
+;; this truncates the date off, then puts NOW() as the date to work around MySQL and MariaDB disliking a date of
+;; 0000-00-00. The resulting SQL looks like:
+;; SELECT str_to_date(concat(date_format(now(), '%Y-%m-%d '), date_format(time_table.mytime, '%H')), '%Y-%m-%d %H') AS mytime
 (defn- trunc-with-format [format-str expr]
-  (str-to-date format-str (date-format format-str expr)))
+  (str-to-date (str "%Y-%m-%d " format-str) (sql-concat (date-format "%Y-%m-%d " (hsql/call :now)) (date-format format-str expr))))
+
 
 (defmethod sql.qp/date [:mysql :default]         [_ _ expr] expr)
-(defmethod sql.qp/date [:mysql :minute]          [_ _ expr] (trunc-with-format "%Y-%m-%d %H:%i" expr))
+(defmethod sql.qp/date [:mysql :minute]          [_ _ expr] (trunc-with-format "%H:%i" expr))
 (defmethod sql.qp/date [:mysql :minute-of-hour]  [_ _ expr] (hx/minute expr))
-(defmethod sql.qp/date [:mysql :hour]            [_ _ expr] (trunc-with-format "%Y-%m-%d %H" expr))
+(defmethod sql.qp/date [:mysql :hour]            [_ _ expr] (trunc-with-format "%H" expr))
 (defmethod sql.qp/date [:mysql :hour-of-day]     [_ _ expr] (hx/hour expr))
 (defmethod sql.qp/date [:mysql :day]             [_ _ expr] (hsql/call :date expr))
 (defmethod sql.qp/date [:mysql :day-of-week]     [_ _ expr] (hsql/call :dayofweek expr))

@@ -208,3 +208,33 @@
                            ;; disable the middleware that normally converts `LocalTime` to `Strings` so we can verify
                            ;; our driver is actually doing the right thing
                            :middleware {:format-rows? false}))))))))))
+
+(deftest group-on-time-column-test
+  (let [driver :mysql]
+    (mt/test-driver driver
+      (let [db-name "time_test"
+            spec (sql-jdbc.conn/connection-details->spec :mysql (tx/dbdef->connection-details driver :server nil))]
+        (doseq [stmt ["DROP DATABASE IF EXISTS time_test;"
+                      "CREATE DATABASE time_test;"]]
+          (jdbc/execute! spec [stmt]))
+        (let [details (tx/dbdef->connection-details driver :db {:database-name db-name})
+              spec (sql-jdbc.conn/connection-details->spec driver details)]
+          (doseq [stmt ["DROP TABLE IF EXISTS time_table;"
+                        "CREATE TABLE time_table (id serial, mytime time);"
+                        "INSERT INTO time_table (mytime) VALUES ('00:00'), ('00:00'), ('23:01'), ('23:01'), ('18:43');"]]
+            (jdbc/execute! spec [stmt]))
+          (mt/with-temp Database [db {:engine driver :details details}]
+            (sync/sync-database! db)
+            (mt/with-db db
+              (testing "can group on TIME columns"
+                (is (= [["2020-07-14T00:00:00Z"] ["2020-07-14T18:43:00Z"] ["2020-07-14T23:01:00Z"]]
+                       (mt/rows
+                        (mt/run-mbql-query time_table
+                                           {:breakout [[:datetime-field (mt/id :time_table :mytime) :minute]]
+                                            :order-by [[:asc [:datetime-field (mt/id :time_table :mytime) :minute]]]}))))
+
+                (is (= [["2020-07-14T23:00:00Z"] ["2020-07-14T18:00:00Z"] ["2020-07-14T00:00:00Z"]]
+                       (mt/rows
+                        (mt/run-mbql-query time_table
+                                           {:breakout [[:datetime-field (mt/id :time_table :mytime) :hour]]
+                                            :order-by [[:desc [:datetime-field (mt/id :time_table :mytime) :hour]]]}))))))))))))
